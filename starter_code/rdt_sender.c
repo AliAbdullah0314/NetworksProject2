@@ -128,11 +128,11 @@ int main(int argc, char **argv)
     // Stop and wait protocol
 
     init_timer(RETRY, resend_packets);
-    srand(time(NULL));
+    // srand(time(NULL));
 
-    // Generate a random sequence number between 0 and 4,294,967,295
-    next_seqno = rand();
-    // next_seqno = 0;
+    // // Generate a random sequence number between 0 and 4,294,967,295
+    // next_seqno = rand();
+    next_seqno = 0;
 
     // first load ten packets into window and send them
     for (int i = 0; i < WINDOW_SIZE; i++)
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         len = fread(buffer, 1, DATA_SIZE, fp);
         if (len <= 0)
         {
-            VLOG(INFO, "End Of File has been reached");
+            VLOG(INFO, "End Of File has been reached first");
             sndpkt = make_packet(0);
             sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
                    (const struct sockaddr *)&serveraddr, serverlen);
@@ -159,6 +159,8 @@ int main(int argc, char **argv)
         {
             error("sendto");
         }
+        VLOG(DEBUG, "Sending packet %d to %s",
+                 send_base, inet_ntoa(serveraddr.sin_addr));
 
         window[i] = sndpkt;
     }
@@ -184,6 +186,7 @@ int main(int argc, char **argv)
 
             recvpkt = (tcp_packet *)buffer;
             printf("%d \n", get_data_size(recvpkt));
+            printf("ack from receiver: %d \n", recvpkt->hdr.ackno);
             if (recvpkt->hdr.ackno > window[0]->hdr.seqno)
             {
                 stop_timer();
@@ -223,7 +226,7 @@ int main(int argc, char **argv)
             len = fread(buffer, 1, DATA_SIZE, fp); // length of one packet
             if (len <= 0)
             {
-                VLOG(INFO, "End Of File has been reached");
+                VLOG(INFO, "End Of File has been reached within");
                 sndpkt = make_packet(0);
                 sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
                        (const struct sockaddr *)&serveraddr, serverlen);
