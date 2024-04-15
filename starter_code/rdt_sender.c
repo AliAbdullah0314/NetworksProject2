@@ -31,6 +31,7 @@ sigset_t sigmask;
 
 int timer_running = 0; // Flag to indicate whether the timer is running or not
 int eof = 0;           // Flag to indicate whether the end is reached or not
+int success = 0;       // Flag to indicate whether the receiver has received all packets
 
 void resend_packets(int sig)
 {
@@ -39,10 +40,13 @@ void resend_packets(int sig)
         // Resend all packets range between
         // sendBase and nextSeqNum
         VLOG(INFO, "Timout happend");
-        if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(window[0]), 0, // replace sendpkt with window[0]
-                   (const struct sockaddr *)&serveraddr, serverlen) < 0)
+        if (window[0] != NULL)
         {
-            error("sendto");
+            if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(window[0]), 0, // replace sendpkt with window[0]
+                       (const struct sockaddr *)&serveraddr, serverlen) < 0)
+            {
+                error("sendto");
+            }
         }
         timer_running = 0;
     }
@@ -79,6 +83,19 @@ void init_timer(int delay, void (*sig_handler)(int))
 
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGALRM);
+}
+
+int window_empty()
+{
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        if (window[i] != NULL)
+        {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -140,10 +157,10 @@ int main(int argc, char **argv)
         len = fread(buffer, 1, DATA_SIZE, fp);
         if (len <= 0)
         {
-            VLOG(INFO, "End Of File has been reached first");
-            sndpkt = make_packet(0);
-            sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-                   (const struct sockaddr *)&serveraddr, serverlen);
+            // VLOG(INFO, "End Of File has been reached first");
+            // sndpkt = make_packet(0);
+            // sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+            //        (const struct sockaddr *)&serveraddr, serverlen);
             eof = 1;
             break;
         }
@@ -160,22 +177,22 @@ int main(int argc, char **argv)
             error("sendto");
         }
         VLOG(DEBUG, "Sending packet %d to %s",
-                 send_base, inet_ntoa(serveraddr.sin_addr));
+             send_base, inet_ntoa(serveraddr.sin_addr));
 
         window[i] = sndpkt;
     }
 
-    if (eof)
-    {
-        free(sndpkt);
-        return 0;
-    }
+    // if (eof)
+    // {
+    //     free(sndpkt);
+    //     return 0;
+    // }
 
     int dupack = 0;
     while (1)
     {
 
-        while (window[WINDOW_SIZE - 1] != NULL)
+        while (window[WINDOW_SIZE - 1] != NULL || (eof && !window_empty()))
         {
             // Wait until the first packet in the window is acknowledged
             if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
@@ -187,55 +204,94 @@ int main(int argc, char **argv)
             recvpkt = (tcp_packet *)buffer;
             printf("%d \n", get_data_size(recvpkt));
             printf("ack from receiver: %d \n", recvpkt->hdr.ackno);
-            if (recvpkt->hdr.ackno > window[0]->hdr.seqno)
+            // printf("window[0]: %d \n", window[0]->hdr.seqno);
+            if (window[0] != NULL)
             {
-                stop_timer();
-                // slide window
-                while (recvpkt->hdr.ackno > window[0]->hdr.seqno) // essentially slide window until first element in window is greater or equal to the ack received
+                if (recvpkt->hdr.ackno > window[0]->hdr.seqno)
                 {
-                    free(window[0]);
-                    for (int i = 0; i < WINDOW_SIZE - 1; i++)
+                    stop_timer();
+                    // slide window
+                    while (window[0] != NULL && recvpkt->hdr.ackno > window[0]->hdr.seqno) // essentially slide window until first element in window is greater or equal to the ack received
                     {
-                        window[i] = window[i + 1];
+                        // printf("before free1\n"); // debugging
+                        // printf("window[0]: %d \n", window[0]->hdr.seqno);
+                        //  free(window[0]);
+                        for (int i = 0; i < WINDOW_SIZE - 1; i++)
+                        {
+                            window[i] = window[i + 1];
+                        }
+
+                        window[WINDOW_SIZE - 1] = NULL;
                     }
-                    window[WINDOW_SIZE - 1] = NULL;
+
+                    if (eof && window_empty()) //end of file and all packets have been acked/recevied at receiver end
+                    {
+                        // printf("before free2\n"); // debugging
+                        free(sndpkt);
+                        sndpkt = make_packet(0);
+                        window[0] = sndpkt;
+                        sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+                               (const struct sockaddr *)&serveraddr, serverlen);
+                        start_timer();
+
+                        if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                                     (struct sockaddr *)&serveraddr, (socklen_t *)&serverlen) < 0) //make sure that receiver has received the final packet
+                        {
+                            error("recvfrom");
+                        }
+                        free(sndpkt);
+                        return 0;
+                    }
+
+                    start_timer(); // for next packet
+
+                    // send_base = recvpkt->hdr.ackno + 1;
                 }
-
-                // send_base = recvpkt->hdr.ackno + 1;
-            }
-            else if (recvpkt->hdr.ackno == window[0]->hdr.seqno)
-            {
-                dupack++;
-                if (dupack == 3) // packet is lost and must do a retransmit
+                else if (recvpkt->hdr.ackno == window[0]->hdr.seqno)
                 {
-                    // stop_timer();
-                    if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(sndpkt), 0,
-                               (const struct sockaddr *)&serveraddr, serverlen) < 0)
+                    dupack++;
+                    printf("dupack: %d\n", recvpkt->hdr.ackno);
+                    if (dupack == 3) // packet is lost and must do a retransmit
                     {
-                        error("sendto");
-                    }
-                    // start_timer();
+                        printf("dupack3: %d\n", recvpkt->hdr.ackno);
+                        // stop_timer();
+                        if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(sndpkt), 0,
+                                   (const struct sockaddr *)&serveraddr, serverlen) < 0)
+                        {
+                            error("sendto");
+                        }
+                        // start_timer();
 
-                    dupack = 0;
+                        dupack = 0;
+                    }
                 }
             }
         }
 
         while (window[WINDOW_SIZE - 1] == NULL) // read and send data until window is full
         {
+            if (eof && window[0] == NULL)
+            {
+                // free(sndpkt);
+                sndpkt = make_packet(0);
+                sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+                       (const struct sockaddr *)&serveraddr, serverlen);
+                return 0;
+            }
+
+            printf("before fread1\n");             // debugging
             len = fread(buffer, 1, DATA_SIZE, fp); // length of one packet
             if (len <= 0)
             {
                 VLOG(INFO, "End Of File has been reached within");
-                sndpkt = make_packet(0);
-                sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-                       (const struct sockaddr *)&serveraddr, serverlen);
+
                 eof = 1;
                 break;
             }
             send_base = next_seqno;
             next_seqno = send_base + len; // will wrap around 0-4294967295
             sndpkt = make_packet(len);
+            printf("before memcpy\n"); // debugging
             memcpy(sndpkt->data, buffer, len);
             sndpkt->hdr.seqno = send_base;
             for (int i = 0; i < WINDOW_SIZE; i++)
@@ -262,11 +318,11 @@ int main(int argc, char **argv)
             start_timer(); // should start timer only if timer isn't already running
         }
 
-        if (eof)
-        {
-            free(sndpkt);
-            return 0;
-        }
+        // if (eof)
+        // {
+        //     free(sndpkt);
+        //     return 0;
+        // }
 
         // // Wait for ACK
         // do
@@ -291,7 +347,7 @@ int main(int argc, char **argv)
         //     /*resend pack if don't recv ACK */
         // } while (recvpkt->hdr.ackno != next_seqno);
 
-        free(sndpkt);
+        // free(sndpkt);
     }
 
     return 0;
