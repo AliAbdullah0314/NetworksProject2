@@ -191,7 +191,7 @@ int main(int argc, char **argv)
 
             recvpkt = (tcp_packet *)buffer;
             printf("%d \n", get_data_size(recvpkt));
-            printf("ack from receiver: %d \n", recvpkt->hdr.ackno); //debugging
+            //printf("ack from receiver: %d \n", recvpkt->hdr.ackno); //debugging
             
             if (window[0] != NULL) //to avoid segfault when doing window[0]->hdr.seqno
             {
