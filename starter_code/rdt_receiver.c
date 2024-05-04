@@ -340,7 +340,7 @@ void buffer_packet(tcp_packet *pkt)
 
     if (!window[index].valid)
     {
-        printf("Buffering packet %d at index %d\n", pkt->hdr.seqno, index);
+        //printf("Buffering packet %d at index %d\n", pkt->hdr.seqno, index); //debugging
         window[index].pkt = malloc(sizeof(tcp_packet) + pkt->hdr.data_size);
         memcpy(window[index].pkt, pkt, sizeof(tcp_packet) + pkt->hdr.data_size);
         window[index].valid = 1;
@@ -358,7 +358,7 @@ void write_buffered_packets(FILE *fp) {
     // Write packets starting from the first valid one that matches next_seqno
     int i = 0;
     while (i < WINDOW_SIZE && window[i].valid && window[i].pkt->hdr.seqno == next_seqno) {
-        printf("Writing buffered packet %d\n", window[i].pkt->hdr.seqno);
+        //printf("Writing buffered packet %d\n", window[i].pkt->hdr.seqno); //debugging
         fwrite(window[i].pkt->data, 1, window[i].pkt->hdr.data_size, fp);
         next_seqno += window[i].pkt->hdr.data_size;
 
@@ -450,8 +450,8 @@ int main(int argc, char **argv)
             break; // Exit the main loop
         }
 
-        printf("Current next_seqno: %d\n", next_seqno);
-printf("Packet seqno: %d, data size: %d\n", recvpkt->hdr.seqno, recvpkt->hdr.data_size);
+        //printf("Current next_seqno: %d\n", next_seqno);
+        //printf("Packet seqno: %d, data size: %d\n", recvpkt->hdr.seqno, recvpkt->hdr.data_size);
 
         // Write packet directly to file if it is the next expected packet
         if (recvpkt->hdr.seqno == next_seqno)
@@ -459,17 +459,17 @@ printf("Packet seqno: %d, data size: %d\n", recvpkt->hdr.seqno, recvpkt->hdr.dat
             time_t now = time(NULL); // Get the current epoch time
             printf("%ld, %d, %d\n", now, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
             fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
-            printf("Packet written directly, updated next_seqno to: %d\n", next_seqno);
+            //printf("Packet written directly, updated next_seqno to: %d\n", next_seqno); //debugging
             next_seqno += recvpkt->hdr.data_size;
-            printf("Updated next_seqno to %d after writing packet with seqno %d\n", next_seqno, recvpkt->hdr.seqno);
+            //printf("Updated next_seqno to %d after writing packet with seqno %d\n", next_seqno, recvpkt->hdr.seqno); //debugging
             write_buffered_packets(fp);
         }
         else if (recvpkt->hdr.seqno > next_seqno) 
         {
             buffer_packet(recvpkt);
-            printf("Packet buffered, next_seqno remains: %d\n", next_seqno);
+            //printf("Packet buffered, next_seqno remains: %d\n", next_seqno); //debugging
         }
-        printf("Post-update next_seqno: %d\n", next_seqno);
+        //printf("Post-update next_seqno: %d\n", next_seqno); //debugging
 
         // Always send an ACK for the highest consecutive packet received
         tcp_packet *sndpkt = make_packet(0);

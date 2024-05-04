@@ -16,26 +16,25 @@
 
 #define STDIN_FD 0
 
-//#define MAXWINDOW 500000 // done so that don't have to realloc memory every time window size increase
+#define MAXWINDOW 500000 //done so that don't have to realloc memory every time window size increase
 
-int RETRY = 3000; // timeout timer value (RTO)
+int RETRY = 3000; // millisecond
 
 // 0 to 4,294,967,295
 u_int32_t next_seqno = 0;
 u_int32_t send_base = 0;
 
-int WINDOW_SIZE = 1; // cwnd size
-double wsize = 1; //used for congestion avoidance incrementation
-int arrsize = 1; //the size of the array that holds the window
+int WINDOW_SIZE = 1;
+double wsize = 1;
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer;
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
-tcp_packet **window;
+// tcp_packet **window;
 
-// tcp_packet *window[MAXWINDOW]; // Sliding window where window[0] serves as 'base' for oldest unacked packet
+tcp_packet *window[MAXWINDOW]; // Sliding window where window[0] serves as 'base' for oldest unacked packet
 sigset_t sigmask;
 double estRTT = 0;
 int timeoutseqnum = 0; // seqnum for which the timeout happened
@@ -44,6 +43,7 @@ int timer_running = 0; // Flag to indicate whether the timer is running or not
 int eof = 0;           // Flag to indicate whether the end is reached or not
 
 int ssthresh = 64;
+
 
 FILE *fp;
 FILE *logcsv;
@@ -64,7 +64,7 @@ struct node
 
 struct node *head = NULL;
 
-// inserts new node into linked list which stores timestamp and retransmitted status of packets
+//inserts new node into linked list which stores timestamp and retransmitted status of packets
 void insert(int seqno, struct timeval send_time, int retransmitted)
 {
     struct node *new_node = (struct node *)malloc(sizeof(struct node));
@@ -92,7 +92,7 @@ struct node *find(int seqno)
         }
         current = current->next;
     }
-    return NULL; //node not found
+    return NULL; // Node not found
 }
 
 int window_empty() // checks whether the whole window is empty or not
@@ -111,7 +111,7 @@ int window_empty() // checks whether the whole window is empty or not
 // struct packet_info send_times[WINDOW_SIZE];
 void init_timer(int delay, void (*sig_handler)(int))
 {
-    //printf("timeout timer value: %d\n", delay); //debugging
+    printf("timeout timer value: %d\n", delay);
     signal(SIGALRM, sig_handler);
     timer.it_interval.tv_sec = delay / 1000; // sets an interval of the timer
     timer.it_interval.tv_usec = (delay % 1000) * 1000;
@@ -174,20 +174,20 @@ void resend_packets(int sig)
             {
                 error("sendto");
             }
-            find(window[0]->hdr.seqno)->retransmitted = 1; 
-            //printf("resending packet %d\n", window[0]->hdr.seqno); //debugging
+            find(window[0]->hdr.seqno)->retransmitted = 1;
+            printf("resending packet %d\n", window[0]->hdr.seqno);
             // send_times[((window[0]->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].retransmitted = 1;
 
-            // exponential backoff
+            //exponential backoff
             if (timeoutseqnum == window[0]->hdr.seqno)
             {
-                if ((2 * RETRY) < 240000) // need to change 8000 to 240000
+                if ((2 * RETRY) < 8000) // need to change 8000 to 240000
                 {
                     RETRY = 2 * RETRY;
                 }
                 else
                 {
-                    RETRY = 240000; // need to change 8000 to 240000
+                    RETRY = 8000; // need to change 8000 to 240000
                 }
 
                 init_timer(RETRY, resend_packets);
@@ -197,7 +197,7 @@ void resend_packets(int sig)
         }
         else if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
         {
-            //printf("entered termination condition 3\n");  //debugging
+            printf("entered termination condition 3\n");
             free(sndpkt);
             sndpkt = make_packet(0);
             window[0] = sndpkt;
@@ -288,12 +288,12 @@ int main(int argc, char **argv)
 
     next_seqno = 0;
 
-    window = (tcp_packet **)malloc(WINDOW_SIZE * sizeof(tcp_packet *)); // dynamic allocation
-    if (window == NULL)
-    {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 1; // Exit with error code
-    }
+    // window = (tcp_packet **)malloc(WINDOW_SIZE * sizeof(tcp_packet *));
+    // if (window == NULL)
+    // {
+    //     fprintf(stderr, "Memory allocation failed\n");
+    //     return 1; // Exit with error code
+    // }
 
     // first load ten packets into window and send them
     for (int i = 0; i < WINDOW_SIZE; i++)
@@ -344,7 +344,7 @@ int main(int argc, char **argv)
 
             recvpkt = (tcp_packet *)buffer;
             printf("%d \n", get_data_size(recvpkt));
-            //printf("ack from receiver: %d \n", recvpkt->hdr.ackno); // debugging
+            printf("ack from receiver: %d \n", recvpkt->hdr.ackno); // debugging
 
             if (window[0] != NULL) // to avoid segfault when doing window[0]->hdr.seqno
             {
@@ -360,12 +360,12 @@ int main(int argc, char **argv)
                         estRTT = 0.875 * estRTT + 0.125 * rtt;
                         RETRY = 2 * estRTT;
                         init_timer(RETRY, resend_packets);
-                        //printf("RTT for packet %d: %.2f ms\n", window[0]->hdr.seqno, rtt); //debugging
-                        //printf("estRTT: %.2f ms\n", estRTT); //debugging
+                        printf("RTT for packet %d: %.2f ms\n", window[0]->hdr.seqno, rtt);
+                        printf("estRTT: %.2f ms\n", estRTT);
                     }
                     else
                     {
-                        //printf("Retransmitted packet %d\n", window[0]->hdr.seqno); //debugging
+                        printf("Retransmitted packet %d\n", window[0]->hdr.seqno);
                     }
 
                     // slide window
@@ -375,60 +375,36 @@ int main(int argc, char **argv)
                         // slow start (increase window by 1 every ack)
                         if (WINDOW_SIZE < ssthresh)
                         {
-                            // dynamic allocation
-                            if (WINDOW_SIZE == arrsize)
-                            {
-                                tcp_packet **temp = (tcp_packet **)realloc(window, (arrsize * 2) * sizeof(tcp_packet *));
-                                if (temp == NULL)
-                                {
-                                    fprintf(stderr, "Memory reallocation failed\n");
-                                    free(window); // Free the previously allocated memory
-                                    return 1;     // Exit with error code
-                                }
-                                window = temp;
-                                
-                                for (int i = arrsize; i < arrsize*2; i++)
-                                {
-                                    window[i] = NULL;
-                                }
+                            // tcp_packet **temp = (tcp_packet **)realloc(window, (WINDOW_SIZE + 1) * sizeof(tcp_packet *));
+                            // if (temp == NULL)
+                            // {
+                            //     fprintf(stderr, "Memory reallocation failed\n");
+                            //     free(window); // Free the previously allocated memory
+                            //     return 1;     // Exit with error code
+                            // }
 
-                                arrsize = arrsize * 2;
-                            }
-
+                            // window = temp;
                             WINDOW_SIZE++;
                             wsize++;
-
                             // window[WINDOW_SIZE - 1] = NULL;
-                            //printf("SLOW START WINDOW_SIZE: %d\n", WINDOW_SIZE); //debugging
+                            printf("SLOW START WINDOW_SIZE: %d\n", WINDOW_SIZE);
                         }
                         else // congestion avoidance
                         {
                             wsize = wsize + (1 / (double)WINDOW_SIZE); // will only increment by a whole number when whole window is ACKED
-                            if (((int)wsize - WINDOW_SIZE) == 1)       // if WINDOW_Size should be updated or not
+                            if (((int)wsize - WINDOW_SIZE) == 1) //if WINDOW_Size should be updated or not
                             {
-                                // dynamic allocation
-                                if (WINDOW_SIZE == arrsize)
-                                {
-                                    tcp_packet **temp = (tcp_packet **)realloc(window, (arrsize * 2) * sizeof(tcp_packet *));
-                                    if (temp == NULL)
-                                    {
-                                        fprintf(stderr, "Memory reallocation failed\n");
-                                        free(window); // Free the previously allocated memory
-                                        return 1;     // Exit with error code
-                                    }
-                                    window = temp;
-                                    
-                                    for (int i = arrsize; i < arrsize*2; i++)
-                                    {
-                                        window[i] = NULL;
-                                    }
-                                    arrsize = arrsize * 2;
-                                }
-
+                                // tcp_packet **temp = (tcp_packet **)realloc(window, (WINDOW_SIZE + 1) * sizeof(tcp_packet *));
+                                // if (temp == NULL)
+                                // {
+                                //     fprintf(stderr, "Memory reallocation failed\n");
+                                //     free(window); // Free the previously allocated memory
+                                //     return 1;     // Exit with error code
+                                // }
+                                // window = temp;
                                 WINDOW_SIZE++;
-
                                 // window[WINDOW_SIZE - 1] = NULL;
-                                //printf("CONG_AVD WINDOW_SIZE: %d\n", WINDOW_SIZE); //debugging
+                                printf("CONG_AVD WINDOW_SIZE: %d\n", WINDOW_SIZE);
                             }
                         }
 
@@ -439,9 +415,9 @@ int main(int argc, char **argv)
                         fprintf(logcsv, "%ld.%06ld,%f,%d\n", seconds, microseconds, wsize, ssthresh); // for CWND.csv
                         // moved above chunk to before shifting of window (previously was after the shifting and window-1=null)
 
-                        for (int i = 0; i < arrsize - 1; i++) // dynamic allocation
+                        for (int i = 0; i < MAXWINDOW - 1; i++)
                         {
-                            if (window[i] == NULL) // so that loop doesnt run MAXWINDOW-1 times and only shifts NON-NULL elements
+                            if (window[i] == NULL) //so that loop doesnt run MAXWINDOW-1 times and only shifts NON-NULL elements
                             {
                                 break;
                             }
@@ -470,22 +446,22 @@ int main(int argc, char **argv)
                         //      }
                         //  }
 
-                        // for (int i = 0; i < WINDOW_SIZE; i++) //debugging
-                        // {
-                        //     if (window[i] != NULL)
-                        //     {
-                        //         printf("SLIDING WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
-                        //     }
-                        //     else
-                        //     {
-                        //         printf("SLIDING WINDOW[%d]: NULL\n", i);
-                        //     }
-                        // }
+                        for (int i = 0; i < WINDOW_SIZE; i++)
+                        {
+                            if (window[i] != NULL)
+                            {
+                                printf("SLIDING WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
+                            }
+                            else
+                            {
+                                printf("SLIDING WINDOW[%d]: NULL\n", i);
+                            }
+                        }
                     }
 
                     if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
                     {
-                        //printf("entered termination condition\n"); //debugging
+                        printf("entered termination condition\n");
                         free(sndpkt);
                         sndpkt = make_packet(0);
                         window[0] = sndpkt;
@@ -571,7 +547,7 @@ int main(int argc, char **argv)
             }
             else if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
             {
-                //printf("entered termination condition 2\n"); //debugging
+                printf("entered termination condition 2\n");
                 free(sndpkt);
                 sndpkt = make_packet(0);
                 window[0] = sndpkt;
@@ -601,19 +577,19 @@ int main(int argc, char **argv)
 
         while (window[WINDOW_SIZE - 1] == NULL) // read and send data until window is full
         {
-            // for (int i = 0; i < WINDOW_SIZE; i++) //debugging
-            // {
-            //     if (window[i] != NULL)
-            //     {
-            //         printf("WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
-            //     }
-            //     else
-            //     {
-            //         printf("WINDOW[%d]: NULL\n", i);
-            //     }
-            // }
+            for (int i = 0; i < WINDOW_SIZE; i++)
+            {
+                if (window[i] != NULL)
+                {
+                    printf("WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
+                }
+                else
+                {
+                    printf("WINDOW[%d]: NULL\n", i);
+                }
+            }
 
-            //printf("\n");
+            printf("\n");
 
             // not sure if should remove or not (debugging)?
             //  if (eof && window[0] == NULL)
