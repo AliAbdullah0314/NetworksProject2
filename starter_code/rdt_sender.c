@@ -16,8 +16,6 @@
 
 #define STDIN_FD 0
 
-//#define MAXWINDOW 500000 // done so that don't have to realloc memory every time window size increase
-
 int RETRY = 3000; // timeout timer value (RTO)
 
 // 0 to 4,294,967,295
@@ -33,15 +31,14 @@ struct sockaddr_in serveraddr;
 struct itimerval timer;
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
-tcp_packet **window;
+tcp_packet **window; //CWND where window[0] serves as 'base' for oldest unacked packet
 
-// tcp_packet *window[MAXWINDOW]; // Sliding window where window[0] serves as 'base' for oldest unacked packet
 sigset_t sigmask;
 double estRTT = 0;
 int timeoutseqnum = 0; // seqnum for which the timeout happened
 
-int timer_running = 0; // Flag to indicate whether the timer is running or not
-int eof = 0;           // Flag to indicate whether the end is reached or not
+int timer_running = 0; //flag to indicate whether the timer is running or not
+int eof = 0;           //flag to indicate whether the end is reached or not
 
 int ssthresh = 64;
 
@@ -62,9 +59,9 @@ struct node
     struct node *next;
 };
 
-struct node *head = NULL;
+struct node *head = NULL;  //linked list which stores timestamp and retransmitted status of packets
 
-// inserts new node into linked list which stores timestamp and retransmitted status of packets
+// inserts new node into linked list
 void insert(int seqno, struct timeval send_time, int retransmitted)
 {
     struct node *new_node = (struct node *)malloc(sizeof(struct node));
@@ -80,7 +77,7 @@ void insert(int seqno, struct timeval send_time, int retransmitted)
     head = new_node;
 }
 
-// Function to find a node with a specific seqno and return it
+// Function to find a node in the linked list with a specific seqno and return it
 struct node *find(int seqno)
 {
     struct node *current = head;
@@ -111,7 +108,6 @@ int window_empty() // checks whether the whole window is empty or not
 // struct packet_info send_times[WINDOW_SIZE];
 void init_timer(int delay, void (*sig_handler)(int))
 {
-    //printf("timeout timer value: %d\n", delay); //debugging
     signal(SIGALRM, sig_handler);
     timer.it_interval.tv_sec = delay / 1000; // sets an interval of the timer
     timer.it_interval.tv_usec = (delay % 1000) * 1000;
@@ -142,10 +138,8 @@ void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        // TODO: modify ssthresh, set cwnd=1, and initiate slow start.
+        // TODO: modify ssthresh, set cwnd=1
 
-        // Resend all packets range between
-        // sendBase and nextSeqNum
         VLOG(INFO, "Timout happend");
 
         if ((WINDOW_SIZE / 2) > 2)
@@ -175,8 +169,6 @@ void resend_packets(int sig)
                 error("sendto");
             }
             find(window[0]->hdr.seqno)->retransmitted = 1; 
-            //printf("resending packet %d\n", window[0]->hdr.seqno); //debugging
-            // send_times[((window[0]->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].retransmitted = 1;
 
             // exponential backoff
             if (timeoutseqnum == window[0]->hdr.seqno)
@@ -197,7 +189,6 @@ void resend_packets(int sig)
         }
         else if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
         {
-            //printf("entered termination condition 3\n");  //debugging
             free(sndpkt);
             sndpkt = make_packet(0);
             window[0] = sndpkt;
@@ -210,13 +201,7 @@ void resend_packets(int sig)
                        (const struct sockaddr *)&serveraddr, serverlen);
                 resendcount++;
             }
-            // start_timer();
-            // char buffer[DATA_SIZE];
-            // if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
-            //              (struct sockaddr *)&serveraddr, (socklen_t *)&serverlen) < 0) // make sure that receiver has received the final packet
-            // {
-            //     error("recvfrom");
-            // }
+            
             free(sndpkt);
             fclose(fp);
             fclose(logcsv);
@@ -225,8 +210,6 @@ void resend_packets(int sig)
 
         timer_running = 0;
         stop_timer();
-
-        // start_timer(); // check if timer needs to be restarted
     }
 }
 
@@ -295,40 +278,6 @@ int main(int argc, char **argv)
         return 1; // Exit with error code
     }
 
-    // first load ten packets into window and send them
-    for (int i = 0; i < WINDOW_SIZE; i++)
-    {
-        len = fread(buffer, 1, DATA_SIZE, fp);
-        if (len <= 0)
-        {
-            eof = 1;
-            break;
-        }
-        send_base = next_seqno;
-        next_seqno = send_base + len; // will wrap around 0-4294967295, is the seqno that will be sent after snpkt is sent
-        sndpkt = make_packet(len);
-        memcpy(sndpkt->data, buffer, len);
-        sndpkt->hdr.seqno = send_base;
-
-        // Send the packet
-        if (sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0,
-                   (const struct sockaddr *)&serveraddr, serverlen) < 0)
-        {
-            error("sendto");
-        }
-        start_timer(); // also will be able to handle the case where the sender is started before receiver
-        VLOG(DEBUG, "Sending packet %d to %s",
-             send_base, inet_ntoa(serveraddr.sin_addr));
-
-        window[i] = sndpkt;
-        // gettimeofday(&send_times[((sndpkt->hdr.seqno)/(DATA_SIZE))% WINDOW_SIZE].send_time, NULL);
-        struct timeval now;
-        gettimeofday(&now, NULL);
-        insert(sndpkt->hdr.seqno, now, 0);
-        // send_times[((sndpkt->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].retransmitted = 0;
-        // find(sndpkt->hdr.seqno)->retransmitted = 0;
-    }
-
     int dupack = 0; // counts the number of dupacks for lowest sequence number (window[0])
     while (1)
     {
@@ -344,7 +293,6 @@ int main(int argc, char **argv)
 
             recvpkt = (tcp_packet *)buffer;
             printf("%d \n", get_data_size(recvpkt));
-            //printf("ack from receiver: %d \n", recvpkt->hdr.ackno); // debugging
 
             if (window[0] != NULL) // to avoid segfault when doing window[0]->hdr.seqno
             {
@@ -352,7 +300,7 @@ int main(int argc, char **argv)
                 {
                     stop_timer(); // stop timer as oldest packet has defintely been received
 
-                    if (!find(window[0]->hdr.seqno)->retransmitted) // checks if it is a retransmitted packet (put inside the loop to calculate RTTs for msised acks?)
+                    if (!find(window[0]->hdr.seqno)->retransmitted) // checks if it is a retransmitted packet
                     {
                         struct timeval now;
                         gettimeofday(&now, NULL);
@@ -360,12 +308,7 @@ int main(int argc, char **argv)
                         estRTT = 0.875 * estRTT + 0.125 * rtt;
                         RETRY = 2 * estRTT;
                         init_timer(RETRY, resend_packets);
-                        //printf("RTT for packet %d: %.2f ms\n", window[0]->hdr.seqno, rtt); //debugging
-                        //printf("estRTT: %.2f ms\n", estRTT); //debugging
-                    }
-                    else
-                    {
-                        //printf("Retransmitted packet %d\n", window[0]->hdr.seqno); //debugging
+                        
                     }
 
                     // slide window
@@ -382,8 +325,8 @@ int main(int argc, char **argv)
                                 if (temp == NULL)
                                 {
                                     fprintf(stderr, "Memory reallocation failed\n");
-                                    free(window); // Free the previously allocated memory
-                                    return 1;     // Exit with error code
+                                    free(window); //free the previously allocated memory
+                                    return 1;     //exit with error code
                                 }
                                 window = temp;
                                 
@@ -397,14 +340,11 @@ int main(int argc, char **argv)
 
                             WINDOW_SIZE++;
                             wsize++;
-
-                            // window[WINDOW_SIZE - 1] = NULL;
-                            //printf("SLOW START WINDOW_SIZE: %d\n", WINDOW_SIZE); //debugging
                         }
                         else // congestion avoidance
                         {
                             wsize = wsize + (1 / (double)WINDOW_SIZE); // will only increment by a whole number when whole window is ACKED
-                            if (((int)wsize - WINDOW_SIZE) == 1)       // if WINDOW_Size should be updated or not
+                            if (((int)wsize - WINDOW_SIZE) == 1)       // if WINDOW_SIZE should be updated or not
                             {
                                 // dynamic allocation
                                 if (WINDOW_SIZE == arrsize)
@@ -413,8 +353,8 @@ int main(int argc, char **argv)
                                     if (temp == NULL)
                                     {
                                         fprintf(stderr, "Memory reallocation failed\n");
-                                        free(window); // Free the previously allocated memory
-                                        return 1;     // Exit with error code
+                                        free(window); //free the previously allocated memory
+                                        return 1;     //exit with error code
                                     }
                                     window = temp;
                                     
@@ -426,9 +366,6 @@ int main(int argc, char **argv)
                                 }
 
                                 WINDOW_SIZE++;
-
-                                // window[WINDOW_SIZE - 1] = NULL;
-                                //printf("CONG_AVD WINDOW_SIZE: %d\n", WINDOW_SIZE); //debugging
                             }
                         }
 
@@ -437,11 +374,11 @@ int main(int argc, char **argv)
                         time_t seconds = tv.tv_sec;
                         long microseconds = tv.tv_usec;
                         fprintf(logcsv, "%ld.%06ld,%f,%d\n", seconds, microseconds, wsize, ssthresh); // for CWND.csv
-                        // moved above chunk to before shifting of window (previously was after the shifting and window-1=null)
+                        
 
                         for (int i = 0; i < arrsize - 1; i++) // dynamic allocation
                         {
-                            if (window[i] == NULL) // so that loop doesnt run MAXWINDOW-1 times and only shifts NON-NULL elements
+                            if (window[i] == NULL) // so that loop doesnt run for arrsize-1 times and only shifts NON-NULL elements
                             {
                                 break;
                             }
@@ -449,43 +386,11 @@ int main(int argc, char **argv)
                             window[i] = window[i + 1];
                         }
 
-                        // if (WINDOW_SIZE - 1 != 0) //was causing issues by essentially deleting packets that were already read
-                        // {
-                        //     window[WINDOW_SIZE - 1] = NULL;
-                        // }
-
-                        // makes sure duplicates aren't present in window
-                        //  for (int i = 0; i < WINDOW_SIZE - 1; i++)
-                        //  {
-                        //      if (window[i] != NULL && window[i + 1] != NULL)
-                        //      {
-                        //          if (window[i]->hdr.seqno == window[i + 1]->hdr.seqno)
-                        //          {
-                        //              window[i + 1] = NULL;
-                        //              for (int j = i + 1; j < WINDOW_SIZE - 1; j++)
-                        //              {
-                        //                  window[j] = window[j + 1];
-                        //              }
-                        //          }
-                        //      }
-                        //  }
-
-                        // for (int i = 0; i < WINDOW_SIZE; i++) //debugging
-                        // {
-                        //     if (window[i] != NULL)
-                        //     {
-                        //         printf("SLIDING WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
-                        //     }
-                        //     else
-                        //     {
-                        //         printf("SLIDING WINDOW[%d]: NULL\n", i);
-                        //     }
-                        // }
                     }
 
                     if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
                     {
-                        //printf("entered termination condition\n"); //debugging
+                        
                         free(sndpkt);
                         sndpkt = make_packet(0);
                         window[0] = sndpkt;
@@ -500,13 +405,6 @@ int main(int argc, char **argv)
                             resendcount++;
                         }
 
-                        // start_timer();
-
-                        // if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                        //              (struct sockaddr *)&serveraddr, (socklen_t *)&serverlen) < 0) // make sure that receiver has received the final packet
-                        // {
-                        //     error("recvfrom");
-                        // }
                         free(sndpkt);
                         fclose(fp);
                         fclose(logcsv);
@@ -518,7 +416,7 @@ int main(int argc, char **argv)
                 else if (recvpkt->hdr.ackno == window[0]->hdr.seqno) // receiver is asking for oldest packet in window
                 {
                     dupack++;
-                    // printf("dupack: %d\n", recvpkt->hdr.ackno); //debugging
+                    
                     if (dupack == 3) // packet is lost and must do a fast retransmit
                     {
                         if (WINDOW_SIZE < ssthresh) // slow start
@@ -553,17 +451,15 @@ int main(int argc, char **argv)
                         long microseconds = tv.tv_usec;
                         fprintf(logcsv, "%ld.%06ld,%f,%d\n", seconds, microseconds, wsize, ssthresh); // for CWND.csv
 
-                        // printf("dupack3: %d\n", recvpkt->hdr.ackno); //debugging
-                        //  stop_timer();
-                        if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(window[0]), 0, // changed sndpkt to window[0] in getsize
+                        if (sendto(sockfd, window[0], TCP_HDR_SIZE + get_data_size(window[0]), 0,
                                    (const struct sockaddr *)&serveraddr, serverlen) < 0)
                         {
                             error("sendto");
                         }
 
-                        // send_times[((window[0]->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].retransmitted = 1;
+                        
                         find(window[0]->hdr.seqno)->retransmitted = 1;
-                        // start_timer();
+                        
 
                         dupack = 0;
                     }
@@ -571,7 +467,6 @@ int main(int argc, char **argv)
             }
             else if (eof && window_empty()) // end of file on sender side and all packets have been acked/recevied at receiver end (termination condition)
             {
-                //printf("entered termination condition 2\n"); //debugging
                 free(sndpkt);
                 sndpkt = make_packet(0);
                 window[0] = sndpkt;
@@ -585,13 +480,7 @@ int main(int argc, char **argv)
                     resendcount++;
                 }
 
-                // start_timer();
-
-                // if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                //              (struct sockaddr *)&serveraddr, (socklen_t *)&serverlen) < 0) // make sure that receiver has received the final packet
-                // {
-                //     error("recvfrom");
-                // }
+                
                 free(sndpkt);
                 fclose(fp);
                 fclose(logcsv);
@@ -601,30 +490,6 @@ int main(int argc, char **argv)
 
         while (window[WINDOW_SIZE - 1] == NULL) // read and send data until window is full
         {
-            // for (int i = 0; i < WINDOW_SIZE; i++) //debugging
-            // {
-            //     if (window[i] != NULL)
-            //     {
-            //         printf("WINDOW[%d]: %d\n", i, window[i]->hdr.seqno);
-            //     }
-            //     else
-            //     {
-            //         printf("WINDOW[%d]: NULL\n", i);
-            //     }
-            // }
-
-            //printf("\n");
-
-            // not sure if should remove or not (debugging)?
-            //  if (eof && window[0] == NULL)
-            //  {
-            //      sndpkt = make_packet(0);
-            //      sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-            //             (const struct sockaddr *)&serveraddr, serverlen);
-            //      return 0;
-            //  }
-
-            // printf("before fread1\n");             // debugging
             len = fread(buffer, 1, DATA_SIZE, fp); // length of one packet
             if (len <= 0)
             {
@@ -636,7 +501,7 @@ int main(int argc, char **argv)
             send_base = next_seqno;
             next_seqno = send_base + len; // will wrap around 0-4294967295
             sndpkt = make_packet(len);
-            // printf("before memcpy\n"); // debugging
+            
             memcpy(sndpkt->data, buffer, len);
             sndpkt->hdr.seqno = send_base;
             for (int i = 0; i < WINDOW_SIZE; i++)
@@ -662,12 +527,9 @@ int main(int argc, char **argv)
                 error("sendto");
             }
 
-            // gettimeofday(&send_times[((sndpkt->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].send_time, NULL);
-            // send_times[((sndpkt->hdr.seqno) / (DATA_SIZE)) % WINDOW_SIZE].retransmitted = 0;
             struct timeval now;
             gettimeofday(&now, NULL);
             insert(sndpkt->hdr.seqno, now, 0);
-            // find(sndpkt->hdr.seqno)->retransmitted = 0;
             start_timer(); // would start timer only if timer isn't already running
         }
     }
